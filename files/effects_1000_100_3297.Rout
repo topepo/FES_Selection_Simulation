@@ -1,0 +1,428 @@
+
+R version 3.5.0 (2018-04-23) -- "Joy in Playing"
+Copyright (C) 2018 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin15.6.0 (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(caret)
+Loading required package: lattice
+Loading required package: ggplot2
+> library(tidyverse)
+── Attaching packages ─────────────────────────────────────── tidyverse 1.2.1 ──
+✔ tibble  1.4.2     ✔ purrr   0.2.5
+✔ tidyr   0.8.2     ✔ dplyr   0.7.8
+✔ readr   1.1.1     ✔ stringr 1.3.1
+✔ tibble  1.4.2     ✔ forcats 0.3.0
+── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+✖ purrr::lift()   masks caret::lift()
+> library(earth)
+Loading required package: plotmo
+Loading required package: plotrix
+Loading required package: TeachingDemos
+> library(keras)
+> library(glmnet)
+Loading required package: Matrix
+
+Attaching package: ‘Matrix’
+
+The following object is masked from ‘package:tidyr’:
+
+    expand
+
+Loading required package: foreach
+
+Attaching package: ‘foreach’
+
+The following objects are masked from ‘package:purrr’:
+
+    accumulate, when
+
+Loaded glmnet 2.0-16
+
+> library(xgboost)
+
+Attaching package: ‘xgboost’
+
+The following object is masked from ‘package:dplyr’:
+
+    slice
+
+> library(ranger)
+> library(kknn)
+
+Attaching package: ‘kknn’
+
+The following object is masked from ‘package:caret’:
+
+    contr.dummy
+
+> library(kernlab)
+
+Attaching package: ‘kernlab’
+
+The following object is masked from ‘package:purrr’:
+
+    cross
+
+The following object is masked from ‘package:ggplot2’:
+
+    alpha
+
+> library(Cubist)
+> library(ipred)
+> library(sessioninfo)
+> 
+> # ----------------------------------------------------------------
+> 
+> n <- 1000
+> extra <- 100
+> cor_value <- 0
+> seed <- 3297
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(seed)
+> trn <- SLC14_1(   n, corrVars = extra, corrValue = cor_value)
+> lrg <- SLC14_1(10^5, corrVars = extra, corrValue = cor_value)
+> 
+> # ----------------------------------------------------------------
+> 
+> ctrl  <- trainControl(method = "cv")
+> rctrl <- trainControl(method = "cv", search = "random")
+> 
+> # ----------------------------------------------------------------
+> 
+> 
+> mod2df <- function(obj, name) {
++   res <- postResample(
++     pred = predict(obj, newdata = lrg), 
++     obs = lrg$y
++   )
++   test <- tibble(
++     RMSE = res["RMSE"],
++     Rsquared = res["Rsquared"],
++     MAE = res["MAE"],
++     time = obj$times$everything[3]/60,
++     model = name
++   )
++   trn <- getTrainPerf(obj)
++   trn <- tibble(
++     RMSE_cv  = trn[,"TrainRMSE"],
++     Rsquared_cv  = trn[,"TrainRsquared"],
++     MAE_cv  = trn[,"TrainMAE"]
++     )
++   bind_cols(test, trn)
++ }
+> 
+> # not in caret at time of writing:
+> predictors.cubist <- function(x, ...)
++   subset(x$usage, Conditions > 0 | Model > 0)$Variable
+> 
+> 
+> # Avoid counting variables in surrogate splits as real variables used
+> bagged_predictors <- function(x, surrogate = FALSE, ...) {
++   code <- getModelInfo("rpart", regex = FALSE)[[1]]$predictors
++   eachTree <- lapply(x$mtree,
++                      function(u, surr) code(u$btree, surrogate = surr),
++                      surr = FALSE)
++   unique(unlist(eachTree))
++ }
+> 
+> vars2df <- function(obj, name) {
++   pred_vars <- 
++     if (obj$method == "cubist") {
++       predictors.cubist(obj$finalModel) 
++     } else {
++         if (obj$method == "treebag") {
++           bagged_predictors(obj$finalModel) 
++         } else {
++           predictors(obj)
++         }
++       } 
++         
++   tibble(
++     Selected = pred_vars,
++     model = rep(name, length(pred_vars))
++   )
++ }
+> 
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> lm_fit <- train(y ~ . + Var05:Var06 + Var19:Var20, 
++                 data = trn, method = "lm",
++                 trControl = ctrl)
+> lm_res <- mod2df(lm_fit, "linear regression")
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> mars_fit <- train(y ~ ., data = trn, method = "gcvEarth",
++                   tuneGrid = data.frame(degree = 1:2),
++                   trControl = ctrl)
+> mars_res <- mod2df(mars_fit, "MARS")
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> svmr_fit <- train(y ~ ., data = trn, method = "svmRadial",
++                   tuneLength = 50,
++                   preProc = c("center", "scale"),
++                   trControl = rctrl)
+> svmr_res <- mod2df(svmr_fit, "SVM (radial)")
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> mlp_fit <- train(y ~ ., data = trn, method = "mlpKerasDecay",
++                  tuneLength = 50,
++                  preProc = c("center", "scale"),
++                  trControl = rctrl,
++                  epochs = 100, 
++                  verbose = 0)
+/Users/max/.virtualenvs/r-tensorflow/lib/python2.7/site-packages/h5py/__init__.py:36: FutureWarning: Conversion of the second argument of issubdtype from `float` to `np.floating` is deprecated. In future, it will be treated as `np.float64 == np.dtype(float).type`.
+  from ._conv import register_converters as _register_converters
+Using TensorFlow backend.
+2018-12-15 05:48:09.369797: I tensorflow/core/platform/cpu_feature_guard.cc:137] Your CPU supports instructions that this TensorFlow binary was not compiled to use: SSE4.2 AVX AVX2 FMA
+/Users/max/.virtualenvs/r-tensorflow/lib/python2.7/site-packages/keras/callbacks.py:119: UserWarning: Method on_batch_end() is slow compared to the batch update (0.111998). Check your callbacks.
+  % delta_t_median)
+/Users/max/.virtualenvs/r-tensorflow/lib/python2.7/site-packages/keras/callbacks.py:119: UserWarning: Method on_batch_end() is slow compared to the batch update (0.119153). Check your callbacks.
+  % delta_t_median)
+Warning message:
+In nominalTrainWorkflow(x = x, y = y, wts = weights, info = trainInfo,  :
+  There were missing values in resampled performance measures.
+> mlp_res <- mod2df(mlp_fit, "neural network")
+> keras::backend()$clear_session()
+> 
+> # ----------------------------------------------------------------
+> 
+> knn_grid <- expand.grid(
++   kmax = 1:20,
++   distance = 2,
++   kernel = c("rectangular", "triangular", "gaussian")
++ )
+> 
+> set.seed(890)
+> knn_fit <- train(y ~ ., data = trn, method = "kknn",
++                  tuneGrid = knn_grid,
++                  preProc = c("center", "scale"),
++                  trControl = ctrl)
+> knn_res <- mod2df(knn_fit, "KNN")
+> 
+> # ----------------------------------------------------------------
+> 
+> cb_grid <- expand.grid(committees = c(1:9, (1:3)*10), 
++                        neighbors = c(0, 1, 3, 5, 7, 9))
+> 
+> set.seed(890)
+> cb_fit <- train(y ~ ., data = trn, method = "cubist",
++                 tuneGrid = cb_grid,
++                 trControl = ctrl)
+> cb_res <- mod2df(cb_fit, "Cubist")
+> 
+> # ----------------------------------------------------------------
+> 
+> glmn_grid <- expand.grid(alpha = seq(0, 1, by = 0.05),
++                          lambda = 2^(-2:2))
+> set.seed(890)
+> glmn_fit <- train(y ~ .+ Var05:Var06 + Var19:Var20, 
++                   data = trn, method = "glmnet",
++                   preProc = c("center", "scale"),
++                   tuneGrid = glmn_grid,
++                   trControl = ctrl)
+> glmn_res <- mod2df(glmn_fit, "glmnet")
+> 
+> # ----------------------------------------------------------------
+> 
+> xgb_grid <- 
++   getModelInfo("xgbTree")[[1]]$grid(len = 50, search = "random") %>%
++   mutate(colsample_bytree = 1)
+> 
+> set.seed(890)
+> xgb_fit <- train(y ~ ., data = trn, method = "xgbTree",
++                  tuneGrid = xgb_grid,
++                  trControl = rctrl)
+> xgb_res <- mod2df(xgb_fit, "boosted tree")
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> bag_fit <- train(y ~ ., data = trn, method = "treebag",
++                  trControl = ctrl,
++                  nbagg = 50)
+> bag_res <- mod2df(bag_fit, "bagged tree")
+> 
+> # ----------------------------------------------------------------
+> 
+> set.seed(890)
+> rf_fit <- train(y ~ ., data = trn, method = "ranger",
++                 tuneLength = 25,
++                 trControl = rctrl,
++                 num.trees = 1000,
++                 verbose = FALSE,
++                 num.threads = 1)
+> rf_res <- mod2df(rf_fit, "random forest")
+> 
+> # ----------------------------------------------------------------
+> 
+> all_res <- bind_rows(
++   lm_res, glmn_res, 
++   mars_res, svmr_res, knn_res, mlp_res,
++   rf_res, xgb_res, cb_res, bag_res
++ ) %>%
++   mutate(
++     extra_vars = extra,
++     training_size = n,
++     correlation = cor_value,
++     seed = seed
++   )
+> 
+> # ----------------------------------------------------------------
+> 
+> predictors <- bind_rows(
++   vars2df(glmn_fit, "glmnet"),
++   vars2df(cb_fit, "Cubist"),
++   vars2df(mars_fit, "MARS"),
++   vars2df(rf_fit, "random forest"),
++   vars2df(xgb_fit, "boosted tree"),
++   vars2df(bag_fit, "bagged tree")
++ ) %>%
++   mutate(
++     extra_vars = extra,
++     training_size = n,
++     correlation = cor_value,
++     seed = seed
++   )
+> 
+> # ----------------------------------------------------------------
+> 
+> f_name <- paste0("effects_", n, "_", extra, "_", cor_value, 
++                  "_", seed, ".RData")
+> 
+> save(all_res, predictors, file = paste0("../RData/", f_name))
+> 
+> # ----------------------------------------------------------------
+> 
+> print(session_info())
+─ Session info ───────────────────────────────────────────────────────────────
+ setting  value                       
+ version  R version 3.5.0 (2018-04-23)
+ os       macOS High Sierra 10.13.6   
+ system   x86_64, darwin15.6.0        
+ ui       X11                         
+ language (EN)                        
+ collate  en_US.UTF-8                 
+ ctype    en_US.UTF-8                 
+ tz       America/New_York            
+ date     2018-12-15                  
+
+─ Packages ───────────────────────────────────────────────────────────────────
+ package       * version    date       lib source        
+ assertthat      0.2.0      2017-04-11 [1] CRAN (R 3.5.0)
+ backports       1.1.2      2017-12-13 [1] CRAN (R 3.5.0)
+ base64enc       0.1-3      2015-07-28 [1] CRAN (R 3.5.0)
+ bindr           0.1.1      2018-03-13 [1] CRAN (R 3.5.0)
+ bindrcpp        0.2.2      2018-03-29 [1] CRAN (R 3.5.0)
+ broom           0.5.1      2018-12-05 [1] CRAN (R 3.5.0)
+ caret         * 6.0-81     2018-11-20 [1] CRAN (R 3.5.0)
+ cellranger      1.1.0      2016-07-27 [1] CRAN (R 3.5.0)
+ class           7.3-14     2015-08-30 [1] CRAN (R 3.5.0)
+ cli             1.0.1      2018-09-25 [1] CRAN (R 3.5.0)
+ codetools       0.2-15     2016-10-05 [1] CRAN (R 3.5.0)
+ colorspace      1.3-2      2016-12-14 [1] CRAN (R 3.5.0)
+ crayon          1.3.4      2017-09-16 [1] CRAN (R 3.5.0)
+ Cubist        * 0.2.2      2018-05-21 [1] CRAN (R 3.5.0)
+ data.table      1.11.8     2018-09-30 [1] CRAN (R 3.5.0)
+ dplyr         * 0.7.8      2018-11-10 [1] CRAN (R 3.5.0)
+ e1071           1.7-0      2018-07-28 [1] CRAN (R 3.5.0)
+ earth         * 4.6.3      2018-05-07 [1] CRAN (R 3.5.0)
+ forcats       * 0.3.0      2018-02-19 [1] CRAN (R 3.5.0)
+ foreach       * 1.4.4      2017-12-12 [1] CRAN (R 3.5.0)
+ generics        0.0.2      2018-11-29 [1] CRAN (R 3.5.0)
+ ggplot2       * 3.1.0      2018-10-25 [1] CRAN (R 3.5.0)
+ glmnet        * 2.0-16     2018-04-02 [1] CRAN (R 3.5.0)
+ glue            1.3.0      2018-07-17 [1] CRAN (R 3.5.0)
+ gower           0.1.2      2017-02-23 [1] CRAN (R 3.5.0)
+ gtable          0.2.0      2016-02-26 [1] CRAN (R 3.5.0)
+ haven           1.1.2      2018-06-27 [1] CRAN (R 3.5.0)
+ hms             0.4.2      2018-03-10 [1] CRAN (R 3.5.0)
+ httr            1.3.1      2017-08-20 [1] CRAN (R 3.5.0)
+ igraph          1.2.2      2018-07-27 [1] CRAN (R 3.5.0)
+ ipred         * 0.9-8      2018-11-05 [1] CRAN (R 3.5.0)
+ iterators       1.0.10     2018-07-13 [1] CRAN (R 3.5.0)
+ jsonlite        1.5        2017-06-01 [1] CRAN (R 3.5.0)
+ keras         * 2.2.4      2018-11-22 [1] CRAN (R 3.5.0)
+ kernlab       * 0.9-27     2018-08-10 [1] CRAN (R 3.5.0)
+ kknn          * 1.3.1      2016-03-26 [1] CRAN (R 3.5.0)
+ lattice       * 0.20-38    2018-11-04 [1] CRAN (R 3.5.0)
+ lava            1.6.4      2018-11-25 [1] CRAN (R 3.5.0)
+ lazyeval        0.2.1      2017-10-29 [1] CRAN (R 3.5.0)
+ lubridate       1.7.4      2018-04-11 [1] CRAN (R 3.5.0)
+ magrittr        1.5        2014-11-22 [1] CRAN (R 3.5.0)
+ MASS            7.3-51.1   2018-11-01 [1] CRAN (R 3.5.0)
+ Matrix        * 1.2-15     2018-11-01 [1] CRAN (R 3.5.0)
+ ModelMetrics    1.2.2      2018-11-03 [1] CRAN (R 3.5.0)
+ modelr          0.1.2      2018-05-11 [1] CRAN (R 3.5.0)
+ munsell         0.5.0      2018-06-12 [1] CRAN (R 3.5.0)
+ nlme            3.1-137    2018-04-07 [1] CRAN (R 3.5.0)
+ nnet            7.3-12     2016-02-02 [1] CRAN (R 3.5.0)
+ pillar          1.3.0      2018-07-14 [1] CRAN (R 3.5.0)
+ pkgconfig       2.0.2      2018-08-16 [1] CRAN (R 3.5.0)
+ plotmo        * 3.5.0      2018-08-20 [1] CRAN (R 3.5.0)
+ plotrix       * 3.7-4      2018-10-03 [1] CRAN (R 3.5.0)
+ plyr            1.8.4      2016-06-08 [1] CRAN (R 3.5.0)
+ prodlim         2018.04.18 2018-04-18 [1] CRAN (R 3.5.0)
+ purrr         * 0.2.5      2018-05-29 [1] CRAN (R 3.5.0)
+ R6              2.3.0      2018-10-04 [1] CRAN (R 3.5.0)
+ ranger        * 0.10.1     2018-06-04 [1] CRAN (R 3.5.0)
+ Rcpp            1.0.0      2018-11-07 [1] CRAN (R 3.5.0)
+ readr         * 1.1.1      2017-05-16 [1] CRAN (R 3.5.0)
+ readxl          1.1.0      2018-04-20 [1] CRAN (R 3.5.0)
+ recipes         0.1.4      2018-11-19 [1] CRAN (R 3.5.0)
+ reshape2        1.4.3      2017-12-11 [1] CRAN (R 3.5.0)
+ reticulate      1.10       2018-08-05 [1] CRAN (R 3.5.0)
+ rlang           0.3.0.1    2018-10-25 [1] CRAN (R 3.5.0)
+ rpart           4.1-13     2018-02-23 [1] CRAN (R 3.5.0)
+ rstudioapi      0.8        2018-10-02 [1] CRAN (R 3.5.0)
+ rvest           0.3.2      2016-06-17 [1] CRAN (R 3.5.0)
+ scales          1.0.0      2018-08-09 [1] CRAN (R 3.5.0)
+ sessioninfo   * 1.1.1      2018-11-05 [1] CRAN (R 3.5.0)
+ stringi         1.2.4      2018-07-20 [1] CRAN (R 3.5.0)
+ stringr       * 1.3.1      2018-05-10 [1] CRAN (R 3.5.0)
+ survival        2.43-1     2018-10-29 [1] CRAN (R 3.5.0)
+ TeachingDemos * 2.10       2016-02-12 [1] CRAN (R 3.5.0)
+ tensorflow      1.10       2018-11-19 [1] CRAN (R 3.5.0)
+ tfruns          1.4        2018-08-25 [1] CRAN (R 3.5.0)
+ tibble        * 1.4.2      2018-01-22 [1] CRAN (R 3.5.0)
+ tidyr         * 0.8.2      2018-10-28 [1] CRAN (R 3.5.0)
+ tidyselect      0.2.5      2018-10-11 [1] CRAN (R 3.5.0)
+ tidyverse     * 1.2.1      2017-11-14 [1] CRAN (R 3.5.0)
+ timeDate        3043.102   2018-02-21 [1] CRAN (R 3.5.0)
+ whisker         0.3-2      2013-04-28 [1] CRAN (R 3.5.0)
+ withr           2.1.2      2018-03-15 [1] CRAN (R 3.5.0)
+ xgboost       * 0.71.2     2018-06-09 [1] CRAN (R 3.5.0)
+ xml2            1.2.0      2018-01-24 [1] CRAN (R 3.5.0)
+ zeallot         0.1.0      2018-01-28 [1] CRAN (R 3.5.0)
+
+[1] /Library/Frameworks/R.framework/Versions/3.5/Resources/library
+> 
+> q("no")
+> proc.time()
+     user    system   elapsed 
+12303.673   238.268 12551.885 
