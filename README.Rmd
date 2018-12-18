@@ -6,7 +6,22 @@ Author: Max Kuhn
 ## Introduction
 
 
+```{r setup, include=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+library(gridExtra)
 
+# setup a color scheme
+models <- 
+  c("linear regression", "glmnet", "MARS", "SVM (radial)", "KNN", 
+    "neural network", "bagged tree", "random forest", "Cubist", "boosted tree")
+
+model_pch <- rep(c(1, 4, 2), times = c(2, 4, 4))
+model_col <- c("black", brewer.pal(n = 5, name = "Set1"))
+model_col <- model_col[c(1:2, c(1, 2, 4, 6), c(1, 2, 4, 6))]
+
+theme_set(theme_bw())
+```
 
 This repo contains simulations related to the effect of machine learning models when additional predictors (that are pure noise) are included. The simulation considers the effect of the following factors:
 
@@ -39,18 +54,105 @@ Fore the two linear models, we assumed that people actually analyzing these data
 
 ## The Effect of Extra Predictors
 
+```{r import-rdata, include = FALSE}
+rd_files <- list.files(path = "RData/", pattern = "RData$", full.names = TRUE)
 
+for(i in seq_along(rd_files)) {
+  load(rd_files[i])
+  if(i == 1)
+    perf_res <- all_res else
+      perf_res <- bind_rows(perf_res, all_res)
+    if(i == 1)
+      var_res <- predictors else
+        var_res <- bind_rows(var_res, predictors)  
+  rm(all_res, predictors)
+}
+```
+```{r manip-effect-data, include = FALSE}
+perf_res <- 
+  perf_res %>%
+  mutate(
+    type = 
+      case_when(
+        model %in% c("glmnet", "linear regression") ~ "Linear Models",
+        model %in% c("KNN", "MARS", "neural network", "SVM (radial)") ~ "Nonlinear Models",
+        TRUE ~ "Trees and Rules"
+      ),
+    model = factor(model, levels = models),
+  ) 
 
+# Get baseline results where there are no extra predictors
+bl <- 
+  perf_res %>%
+  filter(extra_vars == 0) %>%
+  select(RMSE, seed, training_size, model) %>%
+  rename(baseline = RMSE) 
+
+perf_means <- 
+  perf_res %>%
+  select(RMSE, training_size, model, extra_vars, type) %>%
+  full_join(bl, by = c("training_size", "model")) %>%
+  group_by(training_size, model, extra_vars, type) %>%
+  summarize(RMSE = mean(RMSE, na.rm = TRUE),
+            n = sum(!is.na(RMSE))) 
+```
 
 The patterns for each model when extra noise predictors are included are:
 
-<img src="figure/effect-plot-1.png" title="plot of chunk effect-plot" alt="plot of chunk effect-plot" width="95%" style="display: block; margin: auto;" />
+```{r effect-plot, echo = FALSE, out.width = '95%', dpi = 200, fig.width=8, fig.height=4, fig.align='center', dev.args = list(bg = "transparent"), warning=FALSE}
+ ggplot(perf_means,
+         aes(
+           x = extra_vars,
+           y = RMSE,
+           group = model,
+           col = model,
+           shape = model
+         )) +
+  geom_line() +
+  geom_point() +
+  facet_grid(training_size ~ type) +
+  scale_shape_manual(values = model_pch) +
+  scale_color_manual(values = model_col) + 
+  theme(legend.position = "top")
+```
 
 Each point is the average of all simulation results. There were several model negatively affected by the inclusion of irrelevant data. and only a few were close to the lower bound of possible RMSE values (about 3). 
 
 We can also look at these results as the average change from the baseline results:
 
-<img src="figure/change-plot-1.png" title="plot of chunk change-plot" alt="plot of chunk change-plot" width="95%" style="display: block; margin: auto;" />
+```{r change-plot, echo = FALSE, out.width = '95%', dpi = 200, fig.width=8, fig.height=4, fig.align='center', dev.args = list(bg = "transparent"), warning=FALSE}
+change_from_bl <- 
+  perf_res %>%
+  select(RMSE, seed, training_size, model, extra_vars, type) %>%
+  full_join(bl, by = c("seed", "training_size", "model")) %>%
+  mutate(
+    pct_change = (RMSE - baseline)/baseline *100,
+    fold_inc = RMSE/baseline,
+  ) %>%
+  group_by(training_size, model, extra_vars, type) %>%
+  summarize(pct_change = mean(pct_change, na.rm = TRUE),
+            fold_inc = median(fold_inc, na.rm = TRUE),
+            n = sum(!is.na(pct_change))) %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate(model = factor(model, levels = models))
+
+ggplot(change_from_bl,
+         aes(
+           x = extra_vars,
+           y = fold_inc,
+           group = model,
+           col = model,
+           shape = model
+         )) +
+  geom_line() +
+  geom_point() +
+  facet_grid(training_size ~ type) +
+  scale_shape_manual(values = model_pch) +
+  scale_color_manual(values = model_col) + 
+  theme(legend.position = "top") + 
+  ylab("Fold Increase from Baseline")
+```
 
 ## Ability to Detect Informative Predictors
 
@@ -63,7 +165,51 @@ We can define two measures of performance:
 
 These terms can be computed for each simulation and the averages are plotted below in a manner similar to an ROC curve. The best possible results would be values near the upper left corner of the plot. 
 
-<img src="figure/roc-plot-1.png" title="plot of chunk roc-plot" alt="plot of chunk roc-plot" width="40%" style="display: block; margin: auto;" />
+```{r roc-plot, echo = FALSE, out.width = '40%', dpi = 200, fig.width=3, fig.height=9, fig.align='center', dev = 'png', dev.args = list(bg = "transparent"), warning=FALSE}
+select_summaries <- 
+  var_res  %>%
+  mutate(
+    model = factor(model, levels = models),
+    denom = ifelse(model %in% c("linear regression", "glmnet"), 22, 20)
+    ) %>%
+  group_by(seed, training_size, model, extra_vars, denom) %>%
+  summarize(
+    total = length(Selected),
+    real = length(grep("Var", Selected)),
+    sens_n = length(grep("Var", Selected)),
+    spec_n  = length(grep("Corr", Selected)),
+    sens = sens_n/max(denom),
+    spec = 1 - (spec_n/max(extra_vars)),   
+  ) %>%
+  mutate(
+    sens = ifelse(is.na(sens), 0, sens),
+    spec = ifelse(is.na(spec), 0, spec),
+    spec = ifelse(extra_vars == 0, NA, spec)
+  )
+
+select_avg <- 
+  select_summaries %>%
+  filter(extra_vars > 0 ) %>%
+  group_by(training_size, model, extra_vars) %>%
+  summarize(
+    sens = mean(sens),
+    spec = mean(spec),
+    sims = length(sens)
+  ) 
+
+select_mod_num <- sort(unique(as.numeric(select_avg$model)))
+
+ggplot(select_avg, 
+       aes(x = 1 - spec, y = sens, col = model, shape = model)) + 
+  geom_abline(lty = 2, alpha = .25) + 
+  geom_point(cex = 2.5) + 
+  theme(legend.position = "top") + 
+  xlim(0:1) + ylim(0:1) + 
+  coord_equal() + 
+  facet_grid(extra_vars  ~ training_size) + 
+  scale_shape_manual(values = model_pch[select_mod_num]) + 
+  scale_color_manual(values = model_col[select_mod_num])
+```
 
 Different models are optimizing different types of errors. 
 
